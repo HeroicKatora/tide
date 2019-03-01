@@ -3,9 +3,12 @@ use std::pin::Pin;
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 
+use base64::{decode_config_slice, encode_config, URL_SAFE};
+use cookie::Cookie;
 use futures::future::{self, Future, TryFutureExt as _};
+use http::{header, header::HeaderValue};
 use rand::{rngs::StdRng, FromEntropy, Rng};
 use tide::{configuration::Store as ConfigStore, Cookies, Extract, ExtractSeed, Request, Response, RouteMatch};
 
@@ -94,7 +97,7 @@ impl<T> Store<T> {
         let token = ptr.as_ref().create_default();
         // Shouldn't fail because we just created this data.
         let data = ptr.as_ref().get(token).unwrap_or_else(|_|
-            unreachable!("The data was just inserted into the hashmap"));
+            panic!("The session data just inserted is no longer there"));
         Ok(Session {
             token,
             new: true,
@@ -127,17 +130,51 @@ impl<T> StoreInner<T> {
     }
 }
 
+impl Token {
+    const COOKIE_KEY: &'static str = "session_id";
+
+    fn from_cookies(cookies: Cookies) -> Option<Self> {
+        let session = cookies.get(Self::COOKIE_KEY)
+            .map(|session| session.value())
+            .unwrap_or("");
+
+        let mut token = [0; 16];
+        let len = decode_config_slice(session, URL_SAFE, &mut token)
+            .unwrap_or(0);
+
+        if len == token.len() {
+            Some(Token { rnd: token })
+        } else {
+            None
+        }
+    }
+
+    fn into_cookie(self) -> Cookie<'static> {
+        let session_id = encode_config(&self.rnd[..], URL_SAFE);
+        Cookie::build("session_id", session_id)
+            .secure(true)
+            .http_only(true)
+            .finish()
+    }
+}
+
 impl SessionToken {
     fn from_cookies(cookies: Cookies) -> Self {
-        let session = cookies.get("session_id");
-        unimplemented!()
+        SessionToken(Token::from_cookies(cookies))
     }
 }
 
 impl<T> Session<T> {
     /// Ensure that the client has the token.
     pub fn attach(&self, response: &mut Response) {
-        unimplemented!()
+        if self.new {
+            let cookie = format!("{}", self.token.into_cookie());
+            let value = HeaderValue::from_shared(cookie.into())
+                // This should never fail as cookie gives well formatted header values.
+                .unwrap();
+            response.headers_mut()
+                .append(header::SET_COOKIE, value);
+        }
     }
 }
 

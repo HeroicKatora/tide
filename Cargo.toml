@@ -5,6 +5,8 @@ authors = ["Andreas Molzer <andreas.molzer@gmx.de>"]
 edition = "2018"
 
 [dependencies]
+base64 = "0.10"
+cookie = "0.11"
 futures-preview = "0.3.0-alpha.13"
 http = "0.1"
 rand = "0.6"
