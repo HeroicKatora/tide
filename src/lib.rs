@@ -21,6 +21,7 @@ pub struct Token {
 /// Stores sesssions behind opaque tokens and recovers them.
 pub struct Store<T> {
     inner: RwLock<StoreInner<T>>,
+    secure: bool,
 }
 
 struct StoreInner<T> {
@@ -42,6 +43,7 @@ pub struct SessionToken(Option<Token>);
 pub struct Session<T> {
     token: Token,
     new: bool,
+    secure: bool,
     data: T,
 }
 
@@ -52,7 +54,16 @@ impl<T> Store<T> {
     pub fn new() -> Self {
         Store {
             inner: RwLock::new(StoreInner::new()),
+            secure: true,
         }
+    }
+
+    /// Disable setting the `secure` flag on the cookie.
+    ///
+    /// This should be done only for debugging purposes on localhost where HTTPS is not available.
+    /// Any internet facing service should use certificates and never call this method instead.
+    pub fn disable_secure_for_impossible_https(&mut self) {
+        self.secure = false;
     }
 
     /// Create a new session with provided data.
@@ -83,11 +94,13 @@ impl<T> Store<T> {
         F: Future<Output=Result<SessionToken, Response>>,
         T: Default + Clone,
     {
+        let store = ptr.as_ref();
         match r#await!(f)?.0 {
-            Some(token) => match ptr.as_ref().get(token) {
+            Some(token) => match store.get(token) {
                 Ok(data) => return Ok(Session {
                     token,
                     new: false,
+                    secure: store.secure,
                     data,
                 }),
                 Err(_) => (),
@@ -95,13 +108,14 @@ impl<T> Store<T> {
             None => (),
         }
 
-        let token = ptr.as_ref().create_default();
+        let token = store.create_default();
         // Shouldn't fail because we just created this data.
-        let data = ptr.as_ref().get(token).unwrap_or_else(|_|
+        let data = store.get(token).unwrap_or_else(|_|
             panic!("The session data just inserted is no longer there"));
         Ok(Session {
             token,
             new: true,
+            secure: store.secure,
             data,
         })
     }
@@ -150,10 +164,10 @@ impl Token {
         }
     }
 
-    fn into_cookie(self) -> Cookie<'static> {
+    fn into_cookie(self, secure: bool) -> Cookie<'static> {
         let session_id = encode_config(&self.rnd[..], URL_SAFE);
         Cookie::build("session_id", session_id)
-            .secure(true)
+            .secure(secure)
             .http_only(true)
             .finish()
     }
@@ -169,7 +183,7 @@ impl<T> Session<T> {
     /// Ensure that the client has the token.
     pub fn attach(&self, response: &mut Response) {
         if self.new {
-            let cookie = format!("{}", self.token.into_cookie());
+            let cookie = format!("{}", self.token.into_cookie(self.secure));
             let value = HeaderValue::from_shared(cookie.into())
                 // This should never fail as cookie gives well formatted header values.
                 .unwrap();

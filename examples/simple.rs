@@ -22,7 +22,11 @@ async fn incremental(session: Session<Counter>) -> Response {
 
 fn main() {
     let mut app = App::new(());
-    let store = Arc::new(Store::<Counter>::new());
+    let store = {
+        let mut store = Store::new();
+        store.disable_secure_for_impossible_https();
+        Arc::new(store)
+    };
     app.at("/self").get(introspect);
     app.at("/").get(Seeded(incremental, GetOrCreate(store)));
 
