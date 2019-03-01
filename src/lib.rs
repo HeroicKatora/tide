@@ -1,9 +1,13 @@
+#![feature(await_macro, futures_api)]
+use std::pin::Pin;
+
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
+use futures::future::{self, Future, TryFutureExt as _};
 use rand::{rngs::StdRng, FromEntropy, Rng};
-use tide::{ExtractSeed, Cookies};
+use tide::{configuration::Store as ConfigStore, Cookies, Extract, ExtractSeed, Request, Response, RouteMatch};
 
 /// A random generated token identifying the session.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -21,12 +25,24 @@ struct StoreInner<T> {
     active: HashMap<Token, T>,
 }
 
-/// Generic session data.
-#[derive(Clone)]
-pub struct Session<T>(pub T);
-
 /// Marker struct to denote a missing or invalid session token.
 pub struct Unauthorized;
+
+/// Newtype wrapper to implement `Extract` the client side token.
+///
+/// The contained value is `None` when `session_id` cookie has an invalid format or is not set,
+pub struct SessionToken(Option<Token>);
+
+/// Generic session data.
+#[derive(Clone)]
+pub struct Session<T> {
+    token: Token,
+    new: bool,
+    data: T,
+}
+
+/// Seeded extractor that attaches session data or uses an existing one.
+pub struct GetOrCreate<P>(P);
 
 impl<T> Store<T> {
     pub fn new() -> Self {
@@ -56,6 +72,35 @@ impl<T> Store<T> {
     pub fn invalidate(&self, token: Token) -> Option<T> {
         self.inner.write().unwrap().active.remove(&token)
     }
+
+    async fn get_or_create<P, F>(ptr: P, f: F) -> Result<Session<T>, Response>
+    where
+        P: AsRef<Self>,
+        F: Future<Output=Result<SessionToken, Response>>,
+        T: Default + Clone,
+    {
+        match r#await!(f)?.0 {
+            Some(token) => match ptr.as_ref().get(token) {
+                Ok(data) => return Ok(Session {
+                    token,
+                    new: false,
+                    data,
+                }),
+                Err(_) => (),
+            },
+            None => (),
+        }
+
+        let token = ptr.as_ref().create_default();
+        // Shouldn't fail because we just created this data.
+        let data = ptr.as_ref().get(token).unwrap_or_else(|_|
+            unreachable!("The data was just inserted into the hashmap"));
+        Ok(Session {
+            token,
+            new: true,
+            data,
+        })
+    }
 }
 
 impl<T> StoreInner<T> {
@@ -79,5 +124,54 @@ impl<T> StoreInner<T> {
                 },
             }
         }
+    }
+}
+
+impl SessionToken {
+    fn from_cookies(cookies: Cookies) -> Self {
+        let session = cookies.get("session_id");
+        unimplemented!()
+    }
+}
+
+impl<T> Session<T> {
+    /// Ensure that the client has the token.
+    pub fn attach(&self, response: &mut Response) {
+        unimplemented!()
+    }
+}
+
+impl<Data> Extract<Data> for SessionToken
+    where Data: 'static
+{
+    type Fut = future::MapOk<<Cookies as Extract<Data>>::Fut, fn(Cookies) -> Self>;
+
+    fn extract(
+        data: &mut Data,
+        req: &mut Request,
+        params: &Option<RouteMatch<'_>>,
+        store: &ConfigStore,
+    ) -> Self::Fut {
+        // The future is `future::Ready`, so we can convert.
+        Cookies::extract(data, req, params, store)
+            .map_ok(Self::from_cookies)
+    }
+}
+
+impl<T, P, Data> ExtractSeed<Session<T>, Data> for GetOrCreate<P> 
+where
+    P: AsRef<Store<T>> + Clone + Send + Sync + 'static,
+    T: Clone + Default + Send + Sync + 'static,
+    Data: 'static,
+{
+    type Fut = Pin<Box<Future<Output=Result<Session<T>, Response>> + Send>>;
+
+    fn extract(&self,
+        data: &mut Data,
+        req: &mut Request,
+        params: &Option<RouteMatch<'_>>,
+        store: &ConfigStore,
+    ) -> Self::Fut {
+        Box::pin(Store::get_or_create(self.0.clone(), SessionToken::extract(data, req, params, store)))
     }
 }
