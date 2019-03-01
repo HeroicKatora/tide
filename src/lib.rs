@@ -13,7 +13,7 @@ use rand::{rngs::StdRng, FromEntropy, Rng};
 use tide::{configuration::Store as ConfigStore, Cookies, Extract, ExtractSeed, Request, Response, RouteMatch};
 
 /// A random generated token identifying the session.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Token {
     rnd: [u8; 16],
 }
@@ -34,6 +34,7 @@ pub struct Unauthorized;
 /// Newtype wrapper to implement `Extract` the client side token.
 ///
 /// The contained value is `None` when `session_id` cookie has an invalid format or is not set,
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SessionToken(Option<Token>);
 
 /// Generic session data.
@@ -45,7 +46,7 @@ pub struct Session<T> {
 }
 
 /// Seeded extractor that attaches session data or uses an existing one.
-pub struct GetOrCreate<P>(P);
+pub struct GetOrCreate<P>(pub P);
 
 impl<T> Store<T> {
     pub fn new() -> Self {
@@ -175,6 +176,14 @@ impl<T> Session<T> {
             response.headers_mut()
                 .append(header::SET_COOKIE, value);
         }
+    }
+
+    pub fn data(&self) -> &T {
+        &self.data
+    }
+
+    pub fn data_mut(&mut self) -> &mut T {
+        &mut self.data
     }
 }
 
