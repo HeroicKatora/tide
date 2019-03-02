@@ -11,7 +11,7 @@ async fn introspect(user: Result<User, Unauthorized>) -> String {
 }
 
 async fn member(User(user): User) -> String {
-    format!("Hello {}", user)
+    format!("Only accessible to users. Like you, handsome {}", user)
 }
 
 async fn admin(User(_): User) -> &'static str {
