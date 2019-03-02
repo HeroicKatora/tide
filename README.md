@@ -1,4 +1,4 @@
-# An authentication addon for Tide
+# A session addon for Tide
 
 Provided that the [seeded extractors PR](https://github.com/rustasync/tide/pull/126)
 is accepted, this could serve as a starting point for session management in Tide.
